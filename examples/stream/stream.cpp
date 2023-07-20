@@ -12,6 +12,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <sstream>
 #include <fstream>
 
 //  500 -> 00:05.000
@@ -26,6 +27,16 @@ std::string to_timestamp(int64_t t) {
     snprintf(buf, sizeof(buf), "%02d:%02d.%03d", (int) min, (int) sec, (int) msec);
 
     return std::string(buf);
+}
+
+std::string get_current_iso8601() {
+    auto now = std::chrono::system_clock::now();
+    std::time_t now_time = std::chrono::system_clock::to_time_t(now);
+    std::tm* now_tm = std::gmtime(&now_time);
+    std::ostringstream oss;
+
+    oss << std::put_time(now_tm, "%Y-%m-%dT%H:%M:%S");
+    return oss.str();
 }
 
 // command-line parameters
@@ -47,6 +58,7 @@ struct whisper_params {
     bool print_special = false;
     bool no_context    = true;
     bool no_timestamps = false;
+    bool vad_ts        = false;
 
     std::string language  = "en";
     std::string model     = "models/ggml-base.en.bin";
@@ -77,6 +89,7 @@ bool whisper_params_parse(int argc, char ** argv, whisper_params & params) {
         else if (arg == "-nf"  || arg == "--no-fallback")   { params.no_fallback   = true; }
         else if (arg == "-ps"  || arg == "--print-special") { params.print_special = true; }
         else if (arg == "-kc"  || arg == "--keep-context")  { params.no_context    = false; }
+        else if (arg == "-vts" || arg == "--vad-timestamp") { params.vad_ts        = true; }
         else if (arg == "-l"   || arg == "--language")      { params.language      = argv[++i]; }
         else if (arg == "-m"   || arg == "--model")         { params.model         = argv[++i]; }
         else if (arg == "-f"   || arg == "--file")          { params.fname_out     = argv[++i]; }
@@ -110,6 +123,7 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -nf,      --no-fallback   [%-7s] do not use temperature fallback while decoding\n", params.no_fallback ? "true" : "false");
     fprintf(stderr, "  -ps,      --print-special [%-7s] print special tokens\n",                           params.print_special ? "true" : "false");
     fprintf(stderr, "  -kc,      --keep-context  [%-7s] keep context between audio chunks\n",              params.no_context ? "false" : "true");
+    fprintf(stderr, "  -vts,     --vad-timestamp [%-7s] show timestamps with vad instead of duration\n",   params.vad_ts ? "false" : "true");
     fprintf(stderr, "  -l LANG,  --language LANG [%-7s] spoken language\n",                                params.language.c_str());
     fprintf(stderr, "  -m FNAME, --model FNAME   [%-7s] model path\n",                                     params.model.c_str());
     fprintf(stderr, "  -f FNAME, --file FNAME    [%-7s] text output file name\n",                          params.fname_out.c_str());
@@ -331,6 +345,7 @@ int main(int argc, char ** argv) {
 
                 const int n_segments = whisper_full_n_segments(ctx);
                 for (int i = 0; i < n_segments; ++i) {
+                    const auto iso8601 = get_current_iso8601();
                     const char * text = whisper_full_get_segment_text(ctx, i);
 
                     if (params.no_timestamps) {
@@ -344,10 +359,18 @@ int main(int argc, char ** argv) {
                         const int64_t t0 = whisper_full_get_segment_t0(ctx, i);
                         const int64_t t1 = whisper_full_get_segment_t1(ctx, i);
 
-                        printf ("[%s --> %s]  %s\n", to_timestamp(t0).c_str(), to_timestamp(t1).c_str(), text);
+                        if (params.vad_ts) {
+                            printf ("[%s]%s\n", iso8601.c_str(), text);
+                        } else {
+                            printf ("[%s --> %s]  %s\n", to_timestamp(t0).c_str(), to_timestamp(t1).c_str(), text);
+                        }
 
                         if (params.fname_out.length() > 0) {
-                            fout << "[" << to_timestamp(t0) << " --> " << to_timestamp(t1) << "]  " << text << std::endl;
+                            if (params.vad_ts) {
+                                fout << "[" << iso8601 << "]" << text << std::endl;
+                            } else {
+                                fout << "[" << to_timestamp(t0) << " --> " << to_timestamp(t1) << "]  " << text << std::endl;
+                            }
                         }
                     }
                 }
